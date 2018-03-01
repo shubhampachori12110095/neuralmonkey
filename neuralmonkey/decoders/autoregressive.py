@@ -16,6 +16,7 @@ from neuralmonkey.decorators import tensor
 from neuralmonkey.model.model_part import ModelPart, FeedDict, InitializerSpecs
 from neuralmonkey.logging import log, warn
 from neuralmonkey.model.sequence import EmbeddedSequence
+from neuralmonkey.model.stateful import TemporalStateful
 from neuralmonkey.nn.utils import dropout
 from neuralmonkey.tf_utils import get_variable
 from neuralmonkey.vocabulary import Vocabulary, START_TOKEN
@@ -61,7 +62,7 @@ DecoderFeedables = NamedTuple(
 
 
 # pylint: disable=too-many-public-methods
-class AutoregressiveDecoder(ModelPart):
+class AutoregressiveDecoder(ModelPart, TemporalStateful):
 
     # pylint: disable=too-many-arguments
     def __init__(self,
@@ -418,3 +419,19 @@ class AutoregressiveDecoder(ModelPart):
             fd[self.train_mask] = weights
 
         return fd
+
+    @tensor
+    def temporal_states(self) -> tf.Tensor:
+        return tf.cond(
+            self.train_mode,
+            lambda: tf.transpose(self.train_output_states, [1, 0, 2])[:, :-2],
+            lambda: tf.transpose(
+                self.runtime_output_states, [1, 0, 2])[:, :-2])
+
+    @tensor
+    def temporal_mask(self) -> tf.Tensor:
+        return tf.cond(
+            self.train_mode,
+            lambda: tf.transpose(self.train_mask, [1, 0])[:, :-1],
+            lambda: tf.to_float(tf.transpose(
+                self.runtime_mask, [1, 0])[:, :-1]))
