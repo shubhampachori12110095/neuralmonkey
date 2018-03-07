@@ -107,9 +107,9 @@ class TransformerDecoder(AutoregressiveDecoder):
 
         self.encoder_states = get_attention_states(self.encoder)
         self.encoder_mask = get_attention_mask(self.encoder)
-        self.dimension = self.encoder_states.get_shape()[2].value
+        self.model_dimension = self.encoder_states.get_shape()[2].value
 
-        if self.embedding_size != self.dimension:
+        if self.embedding_size != self.model_dimension:
             raise ValueError("Model dimension and input embedding size"
                              "do not match")
 
@@ -120,12 +120,12 @@ class TransformerDecoder(AutoregressiveDecoder):
 
     @property
     def output_dimension(self) -> int:
-        return self.dimension
+        return self.model_dimension
 
     def embed_inputs(self, inputs: tf.Tensor) -> tf.Tensor:
         embedded = tf.nn.embedding_lookup(self.embedding_matrix, inputs)
         length = tf.shape(inputs)[1]
-        return embedded + position_signal(self.dimension, length)
+        return embedded + position_signal(self.model_dimension, length)
 
     @tensor
     def embedded_train_inputs(self) -> tf.Tensor:
@@ -216,7 +216,8 @@ class TransformerDecoder(AutoregressiveDecoder):
 
         # Feed-forward output projection + dropout
         ff_output = tf.layers.dense(
-            ff_hidden_drop, self.dimension, name="ff_out_{}".format(level))
+            ff_hidden_drop, self.model_dimension,
+            name="ff_out_{}".format(level))
         ff_output = dropout(ff_output, self.dropout_keep_prob, self.train_mode)
 
         # Residual connections + layer normalization
