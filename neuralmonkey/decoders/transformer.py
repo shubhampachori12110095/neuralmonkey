@@ -188,9 +188,6 @@ class TransformerDecoder(AutoregressiveDecoder):
     def encoder_attention_sublayer(self, queries: tf.Tensor) -> tf.Tensor:
         """Create the encoder-decoder attention sublayer."""
 
-        encoder_att_states = get_attention_states(self.encoder)
-        encoder_att_mask = get_attention_mask(self.encoder)
-
         # Layer normalization
         normalized_queries = layer_norm(queries)
 
@@ -198,9 +195,9 @@ class TransformerDecoder(AutoregressiveDecoder):
         # TODO handle histories
         encoder_context, _ = attention(
             queries=normalized_queries,
-            keys=encoder_att_states,
-            values=encoder_att_states,
-            keys_mask=encoder_att_mask,
+            keys=self.encoder_states,
+            values=self.encoder_states,
+            keys_mask=self.encoder_mask,
             num_heads=self.n_heads_enc,
             dropout_callback=lambda x: dropout(
                 x, self.attention_dropout_keep_prob, self.train_mode),
@@ -307,12 +304,12 @@ class TransformerDecoder(AutoregressiveDecoder):
             dtype=tf.int32, dynamic_size=True, size=0,
             clear_after_read=False, name="decoded_symbols")
 
-        input_mask = tf.TensorArray(
+        histories["input_mask"] = tf.TensorArray(
             dtype=tf.float32, dynamic_size=True, size=0,
             clear_after_read=False, name="input_mask")
 
-        histories["input_mask"] = input_mask.write(
-            0, tf.ones_like(self.go_symbols, dtype=tf.float32))
+        #histories["input_mask"] = input_mask.write(
+        #    0, tf.ones_like(self.go_symbols, dtype=tf.float32))
 
         # TransformerHistories is a type and should be callable
         # pylint: disable=not-callable
@@ -338,13 +335,16 @@ class TransformerDecoder(AutoregressiveDecoder):
             decoded_symbols_ta = histories.decoded_symbols.write(
                 step, feedables.input_symbol)
 
+            input_mask = histories.input_mask.write(
+                step, tf.to_float(tf.logical_not(feedables.finished)))
+
             # shape (time, batch)
             decoded_symbols = decoded_symbols_ta.stack()
             decoded_symbols.set_shape([None, None])
             decoded_symbols_in_batch = tf.transpose(decoded_symbols)
 
             # mask (time, batch)
-            mask = histories.input_mask.stack()
+            mask = input_mask.stack()
             mask.set_shape([None, None])
 
             with tf.variable_scope(self._variable_scope, reuse=tf.AUTO_REUSE):
@@ -397,8 +397,7 @@ class TransformerDecoder(AutoregressiveDecoder):
                 decoded_symbols=decoded_symbols_ta,
                 self_attention_histories=histories.self_attention_histories,
                 inter_attention_histories=histories.inter_attention_histories,
-                input_mask=histories.input_mask.write(
-                    step + 1, tf.to_float(not_finished)))
+                input_mask=input_mask)
             # pylint: enable=not-callable
 
             new_loop_state = LoopState(
