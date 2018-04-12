@@ -160,7 +160,25 @@ class Dataset(collections.Sized):
         if buf:
             yield buf
 
-    def batch_dataset(self, batch_size: int) -> Iterable["Dataset"]:
+    def batch_bucketed(self, series_names: List[str],
+                       batch_size: int) -> Iterable[Iterable]:
+        buckets = {}  # type: Dict[int, List[Any]]
+        for items in zip(*[self.get_series(key) for key in series_names]):
+            bucket_id = max(len(i) for i in items) % 5
+            if bucket_id not in buckets:
+                buckets[bucket_id] = []
+            buckets[bucket_id].append(items)
+            if len(buckets[bucket_id]) > batch_size:
+                yield zip(*buckets[bucket_id])
+                buckets[bucket_id] = []
+
+        for bucket_id in buckets:
+            if buckets[bucket_id]:
+                yield zip(*buckets[bucket_id])
+
+    def batch_dataset(self,
+                      batch_size: int,
+                      batching_scheme: str) -> Iterable["Dataset"]:
         """Split the dataset into a list of batched datasets.
 
         Arguments:
@@ -170,7 +188,11 @@ class Dataset(collections.Sized):
             Generator yielding batched datasets.
         """
         keys = list(self._series.keys())
-        batched_series = [self.batch_serie(key, batch_size) for key in keys]
+        if batching_scheme == "basic":
+            batched_series = [self.batch_serie(key, batch_size)
+                              for key in keys]
+        elif batching_scheme == "bucketed":
+            batched_series = [self.batch_bucketed(keys, batch_size)]
 
         batch_index = 0
         for next_batches in zip(*batched_series):
