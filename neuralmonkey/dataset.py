@@ -30,6 +30,7 @@ SERIES_OUTPUT = re.compile("s_(.*)_out")
 PREPROCESSED_SERIES = re.compile("pre_([^_]*)$")
 
 
+# pylint: disable=too-many-lines
 class Dataset(collections.Sized):
     """Base Dataset class.
 
@@ -43,6 +44,7 @@ class Dataset(collections.Sized):
     def __init__(self,
                  name: str, series: Dict[str, List],
                  series_outputs: Dict[str, str],
+                 primary_series: str = None,
                  preprocessors: List[Tuple[str, str, Callable]] = None
                 ) -> None:
         """Create a dataset from the provided series of data.
@@ -56,6 +58,10 @@ class Dataset(collections.Sized):
         self.name = name
         self._series = dict(series)
         self.series_outputs = series_outputs
+        self._primary_series = primary_series
+
+        if self._primary_series is None:
+            self._primary_series = list(self._series.keys())[0]
 
         if preprocessors is not None:
             for src_id, tgt_id, function in preprocessors:
@@ -140,10 +146,22 @@ class Dataset(collections.Sized):
         for key, serie in zip(keys, list(zip(*zipped))):
             self._series[key] = serie
 
+    # pylint: disable=no-self-use
+    def _is_over_batch_size(self,
+                            batch: List[List[str]],
+                            batch_size: int,
+                            token_level: bool) -> bool:
+        size = len(batch)
+        if token_level:
+            size = sum([len(x[0]) for x in batch])
+        return size >= batch_size
+    # pylint: enable=no-self-use
+
     def batch_series(self,
                      series_names: List[str],
                      batch_size: int,
-                     bucket_span: int) -> Iterable[Iterable]:
+                     bucket_span: int,
+                     token_level: bool) -> Iterable[Iterable]:
         """Split data series into batches.
 
         Entries are "bucketed" so that the entries of the similar size
@@ -162,11 +180,12 @@ class Dataset(collections.Sized):
             if bucket_span == -1:
                 bucket_id = 0
             else:
-                bucket_id = max(len(i) for i in items) % bucket_span
+                bucket_id = len(items[0]) // bucket_span
             if bucket_id not in buckets:
                 buckets[bucket_id] = []
             buckets[bucket_id].append(items)
-            if len(buckets[bucket_id]) >= batch_size:
+            if self._is_over_batch_size(buckets[bucket_id],
+                                        batch_size, token_level):
                 yield [list(x) for x in zip(*buckets[bucket_id])]
                 buckets[bucket_id] = []
 
@@ -176,7 +195,8 @@ class Dataset(collections.Sized):
 
     def batch_dataset(self,
                       batch_size: int,
-                      bucket_span: int) -> Iterable["Dataset"]:
+                      bucket_span: int,
+                      token_level: bool) -> Iterable["Dataset"]:
         """Split the dataset into a list of batched datasets.
 
         Arguments:
@@ -188,7 +208,9 @@ class Dataset(collections.Sized):
             Generator yielding batched datasets.
         """
         keys = list(self._series.keys())
-        batched_series = self.batch_series(keys, batch_size, bucket_span)
+        keys.insert(0, keys.pop(keys.index(self._primary_series)))
+        batched_series = self.batch_series(
+            keys, batch_size, bucket_span, token_level)
 
         batch_index = 0
         for next_batches in batched_series:
@@ -226,6 +248,7 @@ class LazyDataset(Dataset):
     def __init__(self, name: str,
                  series_paths_and_readers: Dict[str, Tuple[List[str], Reader]],
                  series_outputs: Dict[str, str],
+                 primary_series: str = None,
                  preprocessors: List[Tuple[str, str, Callable]] = None
                 ) -> None:
         """Create a new instance of the lazy dataset.
@@ -240,7 +263,7 @@ class LazyDataset(Dataset):
         parent_series.update({s: None for s in series_paths_and_readers})
         if preprocessors:
             parent_series.update({s[1]: None for s in preprocessors})
-        super().__init__(name, parent_series, series_outputs)
+        super().__init__(name, parent_series, series_outputs, primary_series)
         self.series_paths_and_readers = series_paths_and_readers
 
         for series_name, (paths, _) in series_paths_and_readers.items():
@@ -338,7 +361,9 @@ class LazyDataset(Dataset):
 
 
 def from_files(
-        name: str = None, lazy: bool = False,
+        name: str = None,
+        primary_series: str = None,
+        lazy: bool = False,
         preprocessors: List[Tuple[str, str, Callable]] = None,
         **kwargs) -> Dataset:
     """Load a dataset from the files specified by the provided arguments.
@@ -348,6 +373,8 @@ def from_files(
     Keyword arguments:
         name: The name of the dataset to use. If None (default), the name will
               be inferred from the file names.
+        primary_series: A series that is used for measuring (token_level)
+                        batch size, bucketing, etc.
         lazy: Boolean flag specifying whether to use lazy loading (useful for
               large files). Note that the lazy dataset cannot be shuffled.
               Defaults to False.
@@ -384,12 +411,13 @@ def from_files(
 
     if lazy:
         dataset = LazyDataset(name, series_paths_and_readers, series_outputs,
-                              preprocessors)  # type: Dataset
+                              primary_series, preprocessors)  # type: Dataset
     else:
         series = {key: list(reader(paths))
                   for key, (paths, reader) in series_paths_and_readers.items()}
 
-        dataset = Dataset(name, series, series_outputs, preprocessors)
+        dataset = Dataset(name, series, series_outputs,
+                          primary_series, preprocessors)
         log("Dataset length: {}".format(len(dataset)))
 
     _preprocessed_datasets(dataset, kwargs)

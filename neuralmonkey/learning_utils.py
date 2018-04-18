@@ -36,7 +36,8 @@ def training_loop(tf_manager: TensorFlowManager,
                   epochs: int,
                   trainer: GenericTrainer,  # TODO better annotate
                   batch_size: int,
-                  bucket_span: int,
+                  batch_bucket_span: int,
+                  token_level_batching: bool,
                   log_directory: str,
                   evaluators: EvalConfiguration,
                   runners: List[BaseRunner],
@@ -60,7 +61,9 @@ def training_loop(tf_manager: TensorFlowManager,
         trainer: The trainer object containg the TensorFlow code for computing
             the loss and optimization operation.
         batch_size: Number of examples in one mini-batch.
-        bucket_span: The span of the bucket for bucketed batching.
+        batch_bucket_span: The span of the bucket for bucketed batching.
+        token_level_batching: Count the batch_size per individual tokens
+            in the batch instead of sentences.
         log_directory: Directory where the TensordBoard log will be generated.
             If None, nothing will be done.
         evaluators: List of evaluators. The last evaluator is used as the main.
@@ -159,7 +162,8 @@ def training_loop(tf_manager: TensorFlowManager,
             train_dataset.shuffle()
             train_batched_datasets = train_dataset.batch_dataset(
                 batch_size,
-                bucket_span)
+                batch_bucket_span,
+                token_level_batching)
 
             if epoch_n == 1 and train_start_offset:
                 if not isinstance(train_dataset, LazyDataset):
@@ -175,12 +179,14 @@ def training_loop(tf_manager: TensorFlowManager,
                                     last_log_time, log_period_time):
                     trainer_result = tf_manager.execute(
                         batch_dataset, [trainer], train=True,
-                        summaries=True, bucket_span=bucket_span)
+                        summaries=True, batch_bucket_span=batch_bucket_span,
+                        token_level_batching=token_level_batching)
                     train_results, train_outputs = run_on_dataset(
                         tf_manager, runners, batch_dataset,
                         postprocess, write_out=False,
                         batch_size=runners_batch_size,
-                        bucket_span=bucket_span)
+                        batch_bucket_span=batch_bucket_span,
+                        token_level_batching=token_level_batching)
                     # ensure train outputs are iterable more than once
                     train_outputs = {k: list(v) for k, v
                                      in train_outputs.items()}
@@ -194,9 +200,12 @@ def training_loop(tf_manager: TensorFlowManager,
                         train=True)
                     last_log_time = time.process_time()
                 else:
-                    tf_manager.execute(batch_dataset, [trainer],
-                                       train=True, summaries=False,
-                                       bucket_span=bucket_span)
+                    tf_manager.execute(
+                        batch_dataset, [trainer],
+                        train=True,
+                        summaries=False,
+                        batch_bucket_span=batch_bucket_span,
+                        token_level_batching=token_level_batching)
 
                 if _is_logging_time(step, val_period_batch,
                                     last_val_time, val_period_time):
@@ -371,7 +380,8 @@ def run_on_dataset(tf_manager: TensorFlowManager,
                    postprocess: Postprocess,
                    write_out: bool = False,
                    batch_size: Optional[int] = None,
-                   bucket_span: int = -1,
+                   batch_bucket_span: int = -1,
+                   token_level_batching: bool = False,
                    log_progress: int = 0) -> Tuple[
                        List[ExecutionResult], Dict[str, List[Any]]]:
     """Apply the model on a dataset and optionally write outputs to files.
@@ -402,7 +412,8 @@ def run_on_dataset(tf_manager: TensorFlowManager,
     all_results = tf_manager.execute(dataset, runners,
                                      compute_losses=contains_targets,
                                      batch_size=batch_size,
-                                     bucket_span=bucket_span,
+                                     batch_bucket_span=batch_bucket_span,
+                                     token_level_batching=token_level_batching,
                                      log_progress=log_progress)
 
     result_data = {runner.output_series: result.outputs

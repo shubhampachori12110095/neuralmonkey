@@ -214,11 +214,13 @@ class TensorFlowManager(object):
                 compute_losses=True,
                 summaries=True,
                 batch_size=None,
-                bucket_span: int = -1,
+                batch_bucket_span: int = -1,
+                token_level_batching: bool = False,
                 log_progress: int = 0) -> List[ExecutionResult]:
         if batch_size is None:
             batch_size = len(dataset)
-        batched_dataset = dataset.batch_dataset(batch_size, bucket_span)
+        batched_dataset = dataset.batch_dataset(
+            batch_size, batch_bucket_span, token_level_batching)
         last_log_time = time.process_time()
 
         batch_results = [
